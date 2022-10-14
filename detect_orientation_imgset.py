@@ -94,27 +94,6 @@ def rotate_img_by_deg(img, deg):
         return img_rot
 
 
-def fit_and_pad(img_in: np.ndarray, new_dims_yx: tuple, pad_col=(0.5, 0.5, 0.5)):
-    assert len(img_in.shape) == 3
-    # Resize to fit into target dims
-    target_height, target_width = new_dims_yx
-    height_old, width_old, _ = img_in.shape
-    horz_rescale_factor = target_width / width_old
-    vert_rescale_factor = target_height / height_old
-    if vert_rescale_factor < horz_rescale_factor:
-        new_height, new_width = (int(height_old * vert_rescale_factor), int(width_old * vert_rescale_factor))
-    else:
-        new_height, new_width = (int(height_old * horz_rescale_factor), int(width_old * horz_rescale_factor))
-    img_resized = cv2.resize(img_in, (new_width, new_height))  # Note: (width, height), not (height, width)
-    new_height, new_width, _ = img_resized.shape
-    # Pad image
-    pad_width_left = pad_width_right = int((target_width - new_width) * 0.5)
-    pad_height_top = pad_height_bottom = int((target_height - new_height) * 0.5)
-    img_out = cv2.copyMakeBorder(img_resized, pad_height_top, pad_height_bottom, pad_width_left, pad_width_right,
-                                 borderType=cv2.BORDER_CONSTANT, value=pad_col)
-    return img_out
-
-
 def image_resize(image, width=None, height=None, inter=cv2.INTER_AREA):
     """From: https://stackoverflow.com/a/44659589"""
     # initialize the dimensions of the image to be resized and
@@ -219,7 +198,8 @@ def run(
     # latest_avg = None
 
     for path, im, im0s, vid_cap, s in dataset:
-        _, _, img_height, img_width = im.shape
+        _, img_height, img_width = im.shape
+        ratio = None
 
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
@@ -228,80 +208,59 @@ def run(
             if len(im.shape) == 3:
                 im = im[None]  # expand for batch dim
 
-        tensor_orig_shape = im.shape
-        _, channels, height_orig, width_orig = tensor_orig_shape
-        img = np.array(np.transpose(im[0], axes=(1, 2, 0)))  # Transpose img Tensor to a cv2. compatible format
-
-        # Rotate image:
-        # angles = list(range(0, -91, -15))  # = deg is horizontal. 90 is vertical. Increases clock-wise.
-        angles = list(range(0, 91, 15))  # = deg is horizontal. 90 is vertical. Increases clock-wise.
         ratios = []
-        for deg in angles:
-            img_rotated = rotate_img_by_deg(img, deg)[:, :, ::-1]
-            img_rotated_padded = fit_and_pad(img_rotated, (height_orig, width_orig), pad_col=(0.5, 0.5, 0.5))  # im is 
-            tstamp = format(datetime.datetime.now(), "%Y%m%d-%H%M%S.%f")
-            cv2.imwrite(f"/home/findux/Desktop/det_img_{tstamp}.png", img_rotated_padded)
-            img_rotate_padded_t = np.expand_dims(np.transpose(img_rotated_padded, (2, 1, 0)), axis=0)  # Rebuild the original dimensionality
-            im = torch.from_numpy(img_rotate_padded_t).to(model.device)  # Overwrite original im Tensor
-            # im = im.reshape(tensor_orig_shape)
+        # Inference
+        with dt[1]:
+            visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
+            pred = model(im, augment=augment, visualize=visualize)
 
-            # Inference
-            with dt[1]:
-                visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
-                pred = model(im, augment=augment, visualize=visualize)
+        # NMS
+        with dt[2]:
+            pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
 
-            # NMS
-            with dt[2]:
-                pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+        # Second-stage classifier (optional)
+        # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
 
-            # Second-stage classifier (optional)
-            # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
+        # Process predictions
+        for i, det in enumerate(pred):  # per image
+            seen += 1
+            if webcam:  # batch_size >= 1
+                p, im0, frame = path[i], im0s[i].copy(), dataset.count
+                # s += f'{i}: '
+            else:
+                p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
 
-            # Process predictions
-            for i, det in enumerate(pred):  # per image
-                seen += 1
-                if webcam:  # batch_size >= 1
-                    p, im0, frame = path[i], im0s[i].copy(), dataset.count
-                    # s += f'{i}: '
-                else:
-                    p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
+            p = Path(p)  # to Path
+            save_path = str(save_dir / p.name)  # im.jpg
+            txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # im.txt
+            s += '%gx%g ' % im.shape[2:]  # print string
+            gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+            imc = im0.copy() if save_crop else im0  # for save_crop
+            annotator = Annotator(im0, line_width=line_thickness, example=str(names))
 
-                p = Path(p)  # to Path
-                save_path = str(save_dir / p.name)  # im.jpg
-                txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # im.txt
-                s += '%gx%g ' % im.shape[2:]  # print string
-                gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
-                imc = im0.copy() if save_crop else im0  # for save_crop
-                annotator = Annotator(im0, line_width=line_thickness, example=str(names))
-
-                if len(det):
-                    # Rescale boxes from img_size to im0 size
-                    det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
-                    # Print results
-                    for c in det[:, 5].unique():
-                        n = (det[:, 5] == c).sum()  # detections per class
-                        s += f"{deg}°: {n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
-                    # Write results
-                    for *xyxy, conf, cls in reversed(det):
-                        if save_txt:  # Write to file
-                            xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                            line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
-                            with open(f'{txt_path}.txt', 'a') as f:
-                                f.write(('%g ' * len(line)).rstrip() % line + '\n')
-                        if save_img or save_crop or view_img:  # Add bbox to image
-                            c = int(cls)  # integer class
-                            label = None if hide_labels else (names[c] if hide_conf else f'{deg} deg {names[c]} {conf:.2f}')
-                            annotator.box_label(xyxy, label, color=colors(c, True))
-                        if save_crop:
-                            save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
+            if len(det):
+                # Rescale boxes from img_size to im0 size
+                det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
+                # Print results
+                for c in det[:, 5].unique():
+                    n = (det[:, 5] == c).sum()  # detections per class
+                    s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+                # Write results
+                for *xyxy, conf, cls in reversed(det):
+                    if save_txt:  # Write to file
+                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                        line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
+                        with open(f'{txt_path}.txt', 'a') as f:
+                            f.write(('%g ' * len(line)).rstrip() % line + '\n')
+                    if save_img or save_crop or view_img:  # Add bbox to image
+                        c = int(cls)  # integer class
+                        label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
+                        annotator.box_label(xyxy, label, color=colors(c, True))
+                    if save_crop:
+                        save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
 
                 # Get bbox ratio
                 ratio = get_ratio_of_maxconf_box(det)
-                logging.info(f"Ratio for angle {deg}: {ratio}")
-                if ratio is not None:
-                    ratios.append(ratio)
-                else:
-                    ratios.append(np.NaN)
 
                 # Stream results
                 im0 = annotator.result()
@@ -313,13 +272,7 @@ def run(
                     cv2.imshow(str(p), im0)
                     cv2.waitKey(1)  # 1 millisecond
 
-        if ratios and not np.all(np.isnan(ratios)):
-            logging.info(f"Ratios: {ratios}")
-            object_angle_i = np.nanargmax(ratios)
-            object_angle = angles[object_angle_i]
-            yield object_angle
-        else:
-            yield None
+            yield ratio
 
 
         # Print time (inference-only)
