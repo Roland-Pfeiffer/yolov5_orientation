@@ -1,4 +1,6 @@
-import detect_orientation, detect_orientation_imgset
+#!/usr/bin/env python3
+
+import detect_orientation
 import logging
 
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s\t%(message)s")
