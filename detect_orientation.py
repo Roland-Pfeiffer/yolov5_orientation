@@ -33,7 +33,7 @@ import os
 import platform
 import sys
 from pathlib import Path
-import datetime
+from typing import Union
 import logging
 
 import torch
@@ -148,6 +148,16 @@ def image_resize(image, width=None, height=None, inter=cv2.INTER_AREA):
     return resized
 
 
+def calc_grab_angle(raw_angle: Union[float, int]) -> float:
+    """Converts the raw angle output from the yolov5 angle detection [0:180] to an angle for the grabber [-90:90]"""
+    if not 0 <= raw_angle <= 180:
+        raise ValueError(f"Angle {raw_angle} not in range [0:180].")
+    grab_angle = raw_angle
+    if raw_angle > 90:  # For angles where counter-clockwise rotation is faster
+        grab_angle = -(180 % raw_angle)
+    return grab_angle
+
+
 @smart_inference_mode()
 def run(
         weights=ROOT / 'yolov5s.pt',  # model path or triton URL
@@ -233,17 +243,16 @@ def run(
         img = np.array(np.transpose(im[0], axes=(1, 2, 0)))  # Transpose img Tensor to a cv2. compatible format
 
         # Rotate image:
-        # angles = list(range(0, -91, -15))  # = deg is horizontal. 90 is vertical. Increases clock-wise.
-        angles = list(range(0, 91, 15))  # = deg is horizontal. 90 is vertical. Increases clock-wise.
+        angles = list(range(0, 181, 20))
         ratios = []
         for deg in angles:
             img_rotated = rotate_img_by_deg(img, deg)[:, :, ::-1]
-            img_rotated_padded = fit_and_pad(img_rotated, (height_orig, width_orig), pad_col=(0.5, 0.5, 0.5))  # im is 
-            tstamp = format(datetime.datetime.now(), "%Y%m%d-%H%M%S.%f")
-            cv2.imwrite(f"/home/findux/Desktop/det_img_{tstamp}.png", img_rotated_padded)
+            img_rotated_padded = fit_and_pad(img_rotated, (height_orig, width_orig), pad_col=(0.5, 0.5, 0.5))
+            # cv2.imshow(str(deg), img_rotated_padded)
+            # cv2.waitKey(500)
+            # cv2.destroyWindow(str(deg))
             img_rotate_padded_t = np.expand_dims(np.transpose(img_rotated_padded, (2, 1, 0)), axis=0)  # Rebuild the original dimensionality
             im = torch.from_numpy(img_rotate_padded_t).to(model.device)  # Overwrite original im Tensor
-            # im = im.reshape(tensor_orig_shape)
 
             # Inference
             with dt[1]:
@@ -317,7 +326,8 @@ def run(
             logging.info(f"Ratios: {ratios}")
             object_angle_i = np.nanargmax(ratios)
             object_angle = angles[object_angle_i]
-            yield object_angle
+            grab_angle = calc_grab_angle(object_angle)
+            yield grab_angle
         else:
             yield None
 
