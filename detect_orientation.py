@@ -69,7 +69,7 @@ def get_ratio_of_maxconf_box(det: torch.Tensor):
     return None
 
 
-def rotate_img_by_deg(img, deg):
+def rotate_img_by_deg(img, deg, pad_color=(0.5, 0.5, 0.5)):
     try:
         vres, hres, channels = img.shape
     except AttributeError:
@@ -90,7 +90,7 @@ def rotate_img_by_deg(img, deg):
         rotation_matrix[0, 2] += bound_w / 2 - img_center_xy[0]
         rotation_matrix[1, 2] += bound_h / 2 - img_center_xy[1]
 
-        img_rot = cv2.warpAffine(img, rotation_matrix, (bound_w, bound_h), borderValue=(0.5, 0.5, 0.5))
+        img_rot = cv2.warpAffine(img, rotation_matrix, (bound_w, bound_h), borderValue=pad_color)
         return img_rot
 
 
