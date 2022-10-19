@@ -149,12 +149,17 @@ def image_resize(image, width=None, height=None, inter=cv2.INTER_AREA):
 
 
 def calc_grab_angle(raw_angle: Union[float, int]) -> float:
-    """Converts the raw angle output from the yolov5 angle detection [0:180] to an angle for the grabber [-90:90]"""
-    if not 0 <= raw_angle <= 180:
-        raise ValueError(f"Angle {raw_angle} not in range [0:180].")
-    grab_angle = raw_angle
-    if raw_angle > 90:  # For angles where counter-clockwise rotation is faster
-        grab_angle = -(180 % raw_angle)
+    """Converts the raw angle output from the yolov5 angle detection [0:180] to an angle for the grabber [-90:90].
+    0° is now vertical.
+    """
+    grab_angle = 0
+    if 0 <= raw_angle <= 90: # If object is rotated clockwise up to 90 deg.
+        grab_angle = raw_angle
+    elif 90 < grab_angle <= 180:
+        grab_angle = -(180 - grab_angle)
+    else:
+        print(f"Angle {raw_angle} not in range [0:180].")
+        return None
     return grab_angle
 
 
@@ -324,7 +329,7 @@ def run(
 
         if ratios and not np.all(np.isnan(ratios)):
             logging.info(f"Ratios: {ratios}")
-            object_angle_i = np.nanargmax(ratios)
+            object_angle_i = np.nanargmin(ratios)  # get angle index of lowest ratio (object vertical)
             object_angle = angles[object_angle_i]
             grab_angle = calc_grab_angle(object_angle)
             yield grab_angle
