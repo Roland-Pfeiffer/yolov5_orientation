@@ -153,9 +153,9 @@ def calc_grab_angle(raw_angle: Union[float, int]) -> float:
     0° is now vertical.
     """
     grab_angle = 0
-    if 0 <= raw_angle <= 90: # If object is rotated clockwise up to 90 deg.
+    if 0 <= raw_angle <= 90:  # If object is rotated clockwise up to 90 deg.
         grab_angle = raw_angle
-    elif 90 < grab_angle <= 180:
+    elif 90 < grab_angle <= 180:  # If object is rotates counter-clockwise up to 90 deg.
         grab_angle = -(180 - grab_angle)
     else:
         print(f"Angle {raw_angle} not in range [0:180].")
